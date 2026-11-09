@@ -20,6 +20,10 @@ Eine Dashboard-Karte für Home Assistant, die auswählbare Werte aus dem **Energ
 - Optionale Auswahl-Chips, um einzelne Werte direkt in der Karte auszublenden
 - Visueller Editor, Deutsch und Englisch
 
+## Screenshot
+
+<img width="1289" height="170" alt="image" src="https://github.com/user-attachments/assets/eb6b04a5-79ab-4ab3-884b-75a5e5e4b7fb" />
+
 ## Installation
 
 ### HACS (benutzerdefiniertes Repository)
