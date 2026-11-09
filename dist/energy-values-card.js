@@ -1,5 +1,5 @@
 /*
- * energy-values-card  (v0.1.0-prerelease)
+ * energy-values-card  (v0.1.1-prerelease)
  * Home Assistant Custom Card: zeigt Verbrauch, Netzbezug, Einspeisung, Solar und
  * Batteriespeicher aus dem Energy-Dashboard an. Die Werte sind auswählbar und die
  * Card reagiert auf die energy-date-selection.
@@ -58,7 +58,7 @@
  *     collection_key: null  # nur nötig, wenn die energy-date-selection einen collection_key hat
  */
 
-const CARD_VERSION = "0.1.0-prerelease";
+const CARD_VERSION = "0.1.1-prerelease";
 
 const DEFAULT_VALUES = [
   "consumption",
