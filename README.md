@@ -3,7 +3,6 @@
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
 ![version](https://img.shields.io/badge/version-0.1.0--prerelease-blue)
 
-[English version](README.md)
 
 Eine Dashboard-Karte für Home Assistant, die auswählbare Werte aus dem **Energy-Dashboard** anzeigt (Verbrauch, Netzbezug, Einspeisung, Solar, Batterie, Autarkie, CO₂-neutraler Anteil, Gas, Wasser) und der **`energy-date-selection`** der Dashboard-Ansicht folgt.
 
