@@ -24,7 +24,7 @@ Eine Dashboard-Karte für Home Assistant, die auswählbare Werte aus dem **Energ
 
 ### HACS (benutzerdefiniertes Repository)
 
-[![Open your Home Assistant instance and open this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=YOUR_GITHUB_USER&repository=energy-values-card&category=plugin)
+[![Open your Home Assistant instance and open this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Schwippser&repository=energy-values-card&category=plugin)
 
 1. HACS → ⋮ → **Benutzerdefinierte Repositories**
 2. Repository: `https://github.com/Schwippser/energy-values-card`, Kategorie **Dashboard**
