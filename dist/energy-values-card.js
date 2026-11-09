@@ -22,6 +22,11 @@
  *     decimals: 1
  *     show_date: true       # Zeitraum (Datum) im Kopf der Card anzeigen
  *     show_icons: true      # Icons der einzelnen Werte anzeigen
+ *     show_trend: true      # Trend im Vergleich zum Vor-Zeitraum anzeigen
+ *     trend_display: percent  # percent | absolute | both
+ *     trend_colors: true    # Trend farbig (gut/schlecht), sonst neutral
+ *     trends:               # Trend je Wert (Standard: an; false = aus)
+ *       solar: false
  *     water_unit: m³        # m³ | L  (Einheit des Wasserverbrauchs)
  *     gas_unit: m³          # m³ | L  (Einheit des Gasverbrauchs, nur bei Gas in Volumeneinheiten, nicht bei kWh)
  *     volume_decimals: 2    # Nachkommastellen für Gas/Wasser in m³
@@ -35,6 +40,8 @@
  *         decimals: 1                 # optional
  *         icon: mdi:heat-pump         # optional
  *         color: "#ff7043"            # optional (Icon-Farbe)
+ *         trend_good: none            # optional: up (Anstieg ist gut) | down (Rückgang ist gut) | none
+ *         show_trend: true            # optional: false = kein Trend für diesen Wert
  *         background_color: "#223344" # optional
  *     names:                # optionale eigene Bezeichnungen je Wert
  *       consumption: Haus
@@ -104,6 +111,19 @@ const I18N = {
     fallback: "Keine energy-date-selection gefunden – zeige heute.",
     ed_title: "Titel",
     ed_show_title: "Titel anzeigen",
+    pp: "%-Pkt.",
+    prev_period: "Vorperiode",
+    ed_trend_short: "Trend",
+    cv_show_trend: "Trend anzeigen",
+    tr_percent: "Prozent",
+    tr_absolute: "Absolute Differenz",
+    tr_both: "Beides",
+    cv_trend_good: "Trend ist gut bei",
+    cv_trend_display: "Trend-Darstellung",
+    cv_trend_colors: "Trend farbig (gut/schlecht)",
+    tg_none: "neutral",
+    tg_up: "Anstieg",
+    tg_down: "Rückgang",
     ed_values: "Anzuzeigende Werte",
     ed_layout: "Darstellung",
     ed_decimals: "Nachkommastellen",
@@ -152,6 +172,19 @@ const I18N = {
     fallback: "No energy-date-selection found – showing today.",
     ed_title: "Title",
     ed_show_title: "Show title",
+    pp: "pp",
+    prev_period: "Previous period",
+    ed_trend_short: "Trend",
+    cv_show_trend: "Show trend",
+    tr_percent: "Percent",
+    tr_absolute: "Absolute difference",
+    tr_both: "Both",
+    cv_trend_good: "Trend is good for",
+    cv_trend_display: "Trend display",
+    cv_trend_colors: "Colored trend (good/bad)",
+    tg_none: "neutral",
+    tg_up: "increase",
+    tg_down: "decrease",
     ed_values: "Values to show",
     ed_layout: "Layout",
     ed_decimals: "Decimals",
@@ -226,6 +259,53 @@ const REFRESH_MS = 60 * 1000;
 const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
 const endOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
 
+/** Vor-Zeitraum zum gewählten Zeitraum (wie die Vergleichsfunktion des Energy-Dashboards). */
+function previousRange(start, end) {
+  const shiftDays = (d, n) => {
+    const x = new Date(d);
+    x.setDate(x.getDate() + n);
+    return x;
+  };
+  const sameMonth = start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear();
+  const lastOfMonth = new Date(end.getFullYear(), end.getMonth() + 1, 0).getDate();
+  if (start.toDateString() === end.toDateString()) {
+    return { start: shiftDays(start, -1), end: shiftDays(end, -1) }; // Tag
+  }
+  if (start.getDate() === 1 && sameMonth && end.getDate() === lastOfMonth) {
+    // Monat: voriger Kalendermonat
+    return {
+      start: new Date(start.getFullYear(), start.getMonth() - 1, 1, start.getHours(), start.getMinutes(), start.getSeconds(), start.getMilliseconds()),
+      end: new Date(start.getFullYear(), start.getMonth(), 0, end.getHours(), end.getMinutes(), end.getSeconds(), end.getMilliseconds()),
+    };
+  }
+  if (start.getMonth() === 0 && start.getDate() === 1 && end.getMonth() === 11 && end.getDate() === 31 && start.getFullYear() === end.getFullYear()) {
+    // Jahr: voriges Kalenderjahr
+    return {
+      start: new Date(start.getFullYear() - 1, 0, 1, start.getHours(), start.getMinutes(), start.getSeconds(), start.getMilliseconds()),
+      end: new Date(end.getFullYear() - 1, 11, 31, end.getHours(), end.getMinutes(), end.getSeconds(), end.getMilliseconds()),
+    };
+  }
+  // Woche und eigene Zeiträume: um die Anzahl der Tage zurückschieben
+  const startDay = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const endDay = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+  const days = Math.round((endDay - startDay) / 86400000) + 1;
+  return { start: shiftDays(start, -days), end: shiftDays(end, -days) };
+}
+
+/** Bei welcher Richtung eines Werts der Trend "gut" ist (up = Anstieg gut, down = Rückgang gut). */
+const TREND_GOOD = {
+  consumption: "down",
+  grid_import: "down",
+  grid_export: "up",
+  solar: "up",
+  battery_charge: "none",
+  battery_discharge: "none",
+  autarky: "up",
+  co2_signal: "up",
+  gas: "down",
+  water: "down",
+};
+
 /* ---------- Datenaufbereitung ---------- */
 
 /** Sammelt rekursiv alle String-Werte einer Eigenschaft. */
@@ -247,9 +327,10 @@ function sourceStatIds(s) {
   if (s?.type === "grid") {
     r.grid_import = findProp(s.flow_from, "stat_energy_from");
     r.grid_export = findProp(s.flow_to, "stat_energy_to");
-    // Ältere/abweichende Strukturen: Felder direkt an der Quelle
-    if (!r.grid_import.length && !s.flow_from) r.grid_import = findProp(s, "stat_energy_from");
-    if (!r.grid_export.length && !s.flow_to) r.grid_export = findProp(s, "stat_energy_to");
+    // Ältere/abweichende Strukturen: falls im jeweiligen Flow-Objekt
+    // keine Statistik-ID gefunden wird, die gesamte Grid-Quelle durchsuchen.
+    if (!r.grid_import.length) r.grid_import = findProp(s, "stat_energy_from");
+    if (!r.grid_export.length) r.grid_export = findProp(s, "stat_energy_to");
   } else if (s?.type === "solar") {
     r.solar = findProp(s, "stat_energy_from");
   } else if (s?.type === "gas") {
@@ -391,6 +472,18 @@ const CARD_CSS = `
         .label { grid-area: l; color: var(--secondary-text-color); font-size: 14px; }
         .value { grid-area: v; font-size: 18px; font-weight: 500; color: var(--primary-text-color); }
         .unit { font-size: 12px; font-weight: 400; color: var(--secondary-text-color); }
+        .trend { grid-column: 3; grid-row: 2; justify-self: end; font-size: 12px; white-space: nowrap; color: var(--secondary-text-color); }
+        .list.no-icon .trend { grid-column: 2; }
+        .item.has-trend .icon, .item.has-trend .label { grid-row: 1 / span 2; }
+        /* Diagramm absolut an der Unterkante verankern: kein Restabstand durch Padding oder Flex/Grid-Gap. */
+        .item.has-chart { position: relative; overflow: hidden; padding-bottom: 48px !important; }
+        .item.has-chart .trend-chart {
+          position: absolute; left: 0; right: 0; bottom: 0;
+          display: block; width: 100%; height: 42px; min-height: 0;
+          margin: 0; grid-column: auto;
+        }
+        .trend-chart .line { fill: none; stroke: var(--c); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+        .trend-chart .area { fill: var(--c); opacity: .12; }
         .msg { color: var(--secondary-text-color); padding: 8px 0; }
         .msg.error { color: var(--error-color); }
         .note { margin-top: 10px; font-size: 12px; color: var(--secondary-text-color); }
@@ -469,27 +562,35 @@ class EnergyValuesCard extends HTMLElement {
     if (config.background_colors != null && (typeof config.background_colors !== "object" || Array.isArray(config.background_colors))) {
       throw new Error("'background_colors' muss ein Objekt sein, z. B. solar: \"#ff9800\"");
     }
+    if (config.trends != null && (typeof config.trends !== "object" || Array.isArray(config.trends))) {
+      throw new Error("'trends' muss ein Objekt sein, z. B. solar: false");
+    }
     if (config.names != null && (typeof config.names !== "object" || Array.isArray(config.names))) {
       throw new Error("'names' muss ein Objekt sein, z. B. solar: \"PV\"");
     }
+    const trends = { ...(config.trends || {}) };
+    const trendDisplayByValue = { ...(config.trend_display_by_value || {}) };
+    const trendColorsByValue = { ...(config.trend_colors_by_value || {}) };
+    const trendGoodByValue = { ...(config.trend_good_by_value || {}) };
+    // Alte globale Optionen einmalig auf die einzelnen Werte übertragen.
+    for (const k of DEFAULT_VALUES) {
+      if (config.show_trend === false && trends[k] == null) trends[k] = false;
+      if (trendDisplayByValue[k] == null && config.trend_display) trendDisplayByValue[k] = config.trend_display;
+      if (trendColorsByValue[k] == null && config.trend_colors != null) trendColorsByValue[k] = config.trend_colors;
+    }
+    const { show_trend: _oldShowTrend, trend_display: _oldTrendDisplay, trend_colors: _oldTrendColors, ...cleanConfig } = config;
     this._config = {
-      layout: "list",
-      decimals: 1,
-      show_date: true,
-      show_icons: true,
-      show_title: true,
-      show_selector: false,
-      water_unit: "m³",
-      gas_unit: "m³",
-      volume_decimals: 2,
-      liter_decimals: 0,
-      debug: false,
-      ...config,
+      layout: "list", decimals: 1, show_date: true, show_icons: true,
+      show_title: true, show_selector: false, water_unit: "m³", gas_unit: "m³",
+      volume_decimals: 2, liter_decimals: 0, debug: false,
+      ...cleanConfig,
       background_colors: config.background_colors || {},
       background_opacity: config.background_opacity || {},
-      names: config.names || {},
-      values,
-      custom,
+      names: config.names || {}, trends,
+      trend_display_by_value: trendDisplayByValue,
+      trend_colors_by_value: trendColorsByValue,
+      trend_good_by_value: trendGoodByValue,
+      values, custom,
     };
     this._loadHidden();
     this._render();
@@ -745,11 +846,11 @@ class EnergyValuesCard extends HTMLElement {
           }
         }
         const types = customIds.length ? ["change", "mean", "min", "max", "state"] : ["change"];
-        const query = (units) =>
+        const query = (units, r = range) =>
           hass.callWS({
             type: "recorder/statistics_during_period",
-            start_time: range.start.toISOString(),
-            end_time: range.end.toISOString(),
+            start_time: r.start.toISOString(),
+            end_time: r.end.toISOString(),
             statistic_ids: ids,
             period,
             types,
@@ -766,8 +867,79 @@ class EnergyValuesCard extends HTMLElement {
         }
         if (id !== this._loadId) return;
         const customValues = this._customResults(customs, stats, meta, volumeConverted);
+
+        // Vor-Zeitraum für den Trend (Fehler hier dürfen die Hauptwerte nicht verhindern)
+        let prev = null;
+        const cfg = this._config || {};
+        const trendWanted =
+          (cfg.values || []).some((k) => VALUES[k] && cfg.trends?.[k] !== false) ||
+          customs.some((cv) => cv.show_trend !== false && cfg.trends?.[cv.key] !== false);
+        if (trendWanted) {
+          try {
+            const pr = previousRange(range.start, range.end);
+            const prevStats = await query(volumeConverted ? { energy: "kWh", volume: "m³" } : { energy: "kWh" }, pr);
+            const prevCustom = this._customResults(customs, prevStats, meta, volumeConverted);
+            let totals = {};
+            let has = {};
+            if (hasPrefs) {
+              const pres = compute(prefs, prevStats, meta, volumeConverted);
+              await this._loadCo2(pres, pr, period);
+              totals = pres.totals;
+              has = pres.has;
+            }
+            prev = { totals, has, customValues: prevCustom, label: this._periodLabel(pr.start, pr.end) };
+          } catch (_) {
+            prev = null;
+          }
+        }
+        // Tageswerte der letzten sieben Tage (einschließlich heute) für die Mini-Liniendiagramme.
+        let weekly = {};
+        const graphWanted =
+          (cfg.values || []).some((k) => VALUES[k] && cfg.trends?.[k] !== false) ||
+          customs.some((cv) => cv.show_trend !== false && cfg.trends?.[cv.key] !== false);
+        if (graphWanted) {
+          try {
+            const weekEnd = endOfDay(new Date());
+            const weekStart = startOfDay(new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate() - 6));
+            const weekStats = await hass.callWS({
+              type: "recorder/statistics_during_period",
+              start_time: weekStart.toISOString(),
+              end_time: weekEnd.toISOString(),
+              statistic_ids: ids,
+              period: "day",
+              types,
+              units: volumeConverted ? { energy: "kWh", volume: "m³" } : { energy: "kWh" },
+            });
+            const dayKey = (v) => {
+              const dt = v instanceof Date ? v : new Date(v);
+              return Number.isNaN(dt.getTime()) ? "" : `${dt.getFullYear()}-${dt.getMonth()}-${dt.getDate()}`;
+            };
+            const days = Array.from({ length: 7 }, (_, i) => {
+              const dt = new Date(weekStart); dt.setDate(dt.getDate() + i); return dt;
+            });
+            for (const day of days) {
+              const key = dayKey(day);
+              const oneDay = Object.fromEntries(ids.map((sid) => [sid, (weekStats?.[sid] || []).filter((row) => dayKey(row.start) === key)]));
+              const dayCustom = this._customResults(customs, oneDay, meta, volumeConverted);
+              const dayTotals = hasPrefs ? compute(prefs, oneDay, meta, volumeConverted) : { totals: {}, has: {} };
+              if (hasPrefs && cfg.values?.includes("co2_signal") && cfg.trends?.co2_signal !== false) {
+                await this._loadCo2(dayTotals, { start: day, end: endOfDay(day) }, "day");
+              }
+              for (const [k, v] of Object.entries(dayTotals.totals)) {
+                if (!weekly[k]) weekly[k] = [];
+                weekly[k].push(Number.isFinite(v) ? v : null);
+              }
+              for (const [k, v] of Object.entries(dayCustom)) {
+                if (!weekly[k]) weekly[k] = [];
+                weekly[k].push(Number.isFinite(v.value) ? v.value : null);
+              }
+            }
+          } catch (_) { weekly = {}; }
+        }
+        if (id !== this._loadId) return;
+
         if (!hasPrefs) {
-          this._data = { empty: true, customValues };
+          this._data = { empty: true, customValues, prev, weekly };
         } else {
           const result = compute(prefs, stats, meta, volumeConverted);
           const co2 = await this._loadCo2(result, range, period);
@@ -777,6 +949,8 @@ class EnergyValuesCard extends HTMLElement {
             co2,
             period,
             customValues,
+            prev,
+            weekly,
             sources: prefs.energy_sources.map((s) => `${s.type}: ${Object.keys(s).join(", ")}`),
           };
         }
@@ -800,6 +974,11 @@ class EnergyValuesCard extends HTMLElement {
     try {
       const raw = localStorage.getItem(this._storageKey());
       this._hidden = new Set(raw ? JSON.parse(raw) : []);
+      // grid_export wurde in älteren Versionen teils versehentlich als ausgeblendet
+      // gespeichert. Da die Quelle inzwischen korrekt erkannt wird, den Eintrag
+      // einmalig zurücksetzen, damit "Einspeisung" wieder sichtbar ist.
+      this._hidden.delete("grid_export");
+      this._saveHidden();
     } catch (_) {
       this._hidden = new Set();
     }
@@ -897,6 +1076,92 @@ class EnergyValuesCard extends HTMLElement {
     const isLiter = (x) => /^(l|liter|litre)$/i.test(String(x ?? "").trim());
     const useLiter = { water: isLiter(c.water_unit), gas: isLiter(c.gas_unit) };
 
+    /** Trendanzeige im Vergleich zum Vor-Zeitraum (leer, wenn kein Vergleichswert vorhanden ist). */
+    const trendHtml = (k, cur, prev, unit, dec, good, options = {}) => {
+      if (c.trends?.[k] === false || options.show === false || typeof cur !== "number" || typeof prev !== "number") return "";
+      if (!Number.isFinite(cur) || !Number.isFinite(prev)) return "";
+      const diff = cur - prev;
+      const isPctKey = PCT_KEYS.has(k);
+      const pct = prev !== 0 ? (diff / Math.abs(prev)) * 100 : null;
+      const signed = (n, dd) => {
+        const r = Number(n.toFixed(clampDec(dd)));
+        return (r > 0 ? "+" : r < 0 ? "−" : "") + fmt(Math.abs(n), dd);
+      };
+      const configuredMode = c.trend_display_by_value?.[k] ?? options.display;
+      const mode = ["percent", "absolute", "both"].includes(configuredMode) ? configuredMode : "percent";
+      const absText = `${signed(diff, dec)}${unit ? " " + unit : ""}`;
+      let text;
+      let flat;
+      if (isPctKey) {
+        // Autarkie und CO2-Signal werden als Prozentwerte geführt; auch der Trend nutzt %.
+        text = `${signed(diff, 1)} %`;
+        flat = Math.abs(diff) < 0.05;
+      } else if (mode === "absolute" || pct === null) {
+        text = absText;
+        flat = Math.abs(diff) < 0.5 * Math.pow(10, -clampDec(dec));
+      } else if (mode === "both") {
+        text = `${absText} · ${signed(pct, 1)} %`;
+        flat = Math.abs(diff) < 0.5 * Math.pow(10, -clampDec(dec));
+      } else {
+        text = `${signed(pct, 1)} %`;
+        flat = Math.abs(pct) < 0.05;
+      }
+      const arrow = flat ? "→" : diff > 0 ? "▲" : "▼";
+      let color = "var(--secondary-text-color)";
+      const useColors = c.trend_colors_by_value?.[k] ?? options.colors ?? true;
+      if (!flat && useColors && (good === "up" || good === "down")) {
+        const isGood = (diff > 0) === (good === "up");
+        color = isGood ? "var(--success-color, #43a047)" : "var(--error-color, #db4437)";
+      }
+      const prevText = `${fmt(prev, dec)}${unit ? " " + unit : ""}`;
+      const title = `${t.prev_period}${d.prev?.label ? " (" + d.prev.label + ")" : ""}: ${prevText}`;
+      return `<div class="trend" style="color:${esc(color)}" title="${esc(title)}">${arrow} ${esc(text)}</div>`;
+    };
+
+    /** Kleine SVG-Linie für die letzten sieben Tage. */
+    const sparklineHtml = (k) => {
+      if (c.trends?.[k] === false) return "";
+      const cv = customMap.get(k);
+      if (cv?.show_trend === false) return "";
+      const values = d?.weekly?.[k];
+      if (!Array.isArray(values) || values.length < 2) return "";
+      const nums = values.map((v) => Number.isFinite(v) ? v : null);
+      const valid = nums.filter((v) => v != null);
+      if (valid.length < 2) return "";
+      const min = Math.min(...valid), max = Math.max(...valid);
+      const span = max - min || 1;
+      const pts = nums.map((v, i) => v == null ? null : [i * (100 / (nums.length - 1)), 32 - ((v - min) / span) * 26]);
+      const segments = [];
+      let current = [];
+      for (const pt of pts) { if (pt) current.push(pt); else if (current.length) { segments.push(current); current = []; } }
+      if (current.length) segments.push(current);
+      // Catmull-Rom-ähnliche kubische Bézier-Kurven glätten die Übergänge,
+      // ohne die vorhandenen Messpunkte oder Lücken in den Daten zu verändern.
+      const smoothSegment = (seg) => {
+        if (seg.length < 3) {
+          return seg.map((pt, i) => `${i ? "L" : "M"}${pt[0].toFixed(1)},${pt[1].toFixed(1)}`).join(" ");
+        }
+        let dPath = `M${seg[0][0].toFixed(1)},${seg[0][1].toFixed(1)}`;
+        for (let i = 0; i < seg.length - 1; i++) {
+          const p0 = seg[Math.max(0, i - 1)];
+          const p1 = seg[i];
+          const p2 = seg[i + 1];
+          const p3 = seg[Math.min(seg.length - 1, i + 2)];
+          const c1x = p1[0] + (p2[0] - p0[0]) / 6;
+          const c1y = p1[1] + (p2[1] - p0[1]) / 6;
+          const c2x = p2[0] - (p3[0] - p1[0]) / 6;
+          const c2y = p2[1] - (p3[1] - p1[1]) / 6;
+          dPath += ` C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2[0].toFixed(1)},${p2[1].toFixed(1)}`;
+        }
+        return dPath;
+      };
+      const path = segments.map(smoothSegment).join(" ");
+      if (!path) return "";
+      const first = pts.find(Boolean), last = [...pts].reverse().find(Boolean);
+      const area = segments.length === 1 ? `${path} L${last[0].toFixed(1)},36 L${first[0].toFixed(1)},36 Z` : "";
+      return `<svg class="trend-chart" viewBox="0 0 100 36" preserveAspectRatio="none" role="img" aria-label="Verlauf der letzten sieben Tage">${area ? `<path class="area" d="${area}"></path>` : ""}<path class="line" d="${path}"></path></svg>`;
+    };
+
     /** Alles, was zur Darstellung eines Werts nötig ist (Icon, Farbe, Text, Hintergrund). */
     const describe = (k) => {
       const cv = customMap.get(k);
@@ -912,20 +1177,30 @@ class EnergyValuesCard extends HTMLElement {
           icon: cv.icon || st?.attributes?.icon || "mdi:gauge",
           color: cssColor(cv.color) || "var(--primary-color, #03a9f4)",
           text,
+          trend:
+            cv.show_trend === false
+              ? ""
+              : trendHtml(k, isNum ? num : undefined, d.prev?.customValues?.[k]?.value, unit, dec, cv.trend_good || "none", { display: cv.trend_display, colors: cv.trend_colors }),
           bg:
             backgroundFor(c, k) ||
             backgroundFor({ background_colors: { [k]: cv.background_color }, background_opacity: { [k]: cv.background_opacity } }, k),
         };
       }
       let v = totals[k];
+      let pv = d.prev?.has?.[k] ? d.prev.totals[k] : undefined;
       const isPct = PCT_KEYS.has(k);
       let unit = isPct ? "%" : d.units?.[k] || "kWh";
-      if (VOL_KEYS.has(k) && unit === "m³" && useLiter[k]) { v *= 1000; unit = "L"; }
+      if (VOL_KEYS.has(k) && unit === "m³" && useLiter[k]) {
+        v *= 1000;
+        if (typeof pv === "number") pv *= 1000;
+        unit = "L";
+      }
       const decimals = isPct ? 0 : unit === "kWh" ? c.decimals : unit === "L" ? c.liter_decimals : c.volume_decimals;
       return {
         icon: VALUES[k].icon,
         color: VALUES[k].color,
         text: `${esc(fmt(v, decimals))}<span class="unit"> ${esc(unit)}</span>`,
+        trend: trendHtml(k, v, pv, unit, decimals, c.trend_good_by_value?.[k] ?? TREND_GOOD[k] ?? "none"),
         bg: backgroundFor(c, k),
       };
     };
@@ -948,11 +1223,14 @@ class EnergyValuesCard extends HTMLElement {
       body += `<div class="${c.layout === "grid" ? "grid" : "list"}${showIcons ? "" : " no-icon"}">${shown
         .map((k) => {
           const it = describe(k);
+          const chart = sparklineHtml(k);
           return `
-            <div class="item${it.bg ? " has-bg" : ""}" style="--c:${esc(it.color)};${it.bg ? `--bg:${esc(it.bg)};` : ""}">
+            <div class="item${it.bg ? " has-bg" : ""}${it.trend ? " has-trend" : ""}${chart ? " has-chart" : ""}" style="--c:${esc(it.color)};${it.bg ? `--bg:${esc(it.bg)};` : ""}">
               ${showIcons ? `<div class="icon"><ha-icon icon="${esc(it.icon)}"></ha-icon></div>` : ""}
               <div class="label">${esc(label(k))}</div>
               <div class="value">${it.text}</div>
+              ${it.trend || ""}
+              ${chart}
             </div>`;
         })
         .join("")}</div>`;
@@ -970,12 +1248,25 @@ class EnergyValuesCard extends HTMLElement {
         `Start: ${this._range.start.toISOString()}`,
         `Ende:  ${this._range.end.toISOString()}`,
         `Periode: ${d.period}`,
+        `Vorperiode: ${d.prev ? d.prev.label : "-"}`,
         `CO2-Signal-Entität: ${d.co2?.entity ?? "-"} | fossil: ${d.co2?.fossil == null ? "-" : d.co2.fossil.toFixed(3) + " kWh"}${d.co2?.error ? " | Fehler: " + d.co2.error : ""}`,
         `CO2-neutral: Verbrauch=${d.co2?.home?.toFixed?.(3) ?? "-"} kWh -> ${d.co2?.homeShare?.toFixed?.(3) ?? "-"} % | Netzbezug=${d.co2?.grid?.toFixed?.(3) ?? "-"} kWh -> ${d.co2?.gridShare?.toFixed?.(3) ?? "-"} %`,
         `Gas/Wasser-Einheiten: ${JSON.stringify(d.units || {})}${d.skipped?.length ? " | übersprungen (andere Einheit): " + d.skipped.join(", ") : ""}`,
         `Eigene Werte: ${JSON.stringify(d.customValues || {})}`,
         `Quellen im Energy-Dashboard:`,
-        ...(d.sources || []).map((s) => `  ${s}`),
+        ...(this._prefs?.energy_sources || []).map((s, i) => {
+          const ids = sourceStatIds(s);
+          return [
+            `  Quelle ${i + 1} (${s.type || "unbekannt"}): ${Object.keys(s).join(", ")}`,
+            `    stat_energy_to gefunden: ${JSON.stringify(findProp(s, "stat_energy_to"))}`,
+            `    grid_export-Zuordnung: ${JSON.stringify(ids.grid_export || [])}`,
+            `    flow_to-Struktur: ${JSON.stringify(s.flow_to ?? null)}`,
+          ].join("\\n");
+        }),
+        `grid_export in Card-Auswahl: ${(c.values || []).includes("grid_export") ? "ja" : "nein"}`,
+        `grid_export ausgeblendet: ${this._hidden.has("grid_export") ? "ja" : "nein"}`,
+        `Anzeigeliste: ${shown.join(", ") || "-"}`,
+        `grid_export erkannt: ${has.grid_export ? "ja" : "nein"}`,
         `Nicht gefunden: ${Object.keys(has).filter((k) => !has[k]).join(", ") || "-"}`,
         `--`,
         ...Object.entries(d.groups || {}).flatMap(([key, ids]) => [
@@ -1038,8 +1329,38 @@ class EnergyValuesCardEditor extends HTMLElement {
       this._form.addEventListener("value-changed", (ev) => {
         ev.stopPropagation();
         const next = { ...ev.detail.value };
+        delete next.show_trend;
+        delete next.trend_display;
+        delete next.trend_colors;
         const sel = next.values_sel;
         delete next.values_sel;
+        const ne = next.names_edit;
+        delete next.names_edit;
+        if (ne) {
+          // Einträge für eigene Werte (Entitäts-IDs) bleiben unverändert erhalten
+          const names = { ...(this._config?.names || {}) };
+          const trends = { ...(this._config?.trends || {}) };
+          const displays = { ...(this._config?.trend_display_by_value || {}) };
+          const colors = { ...(this._config?.trend_colors_by_value || {}) };
+          const good = { ...(this._config?.trend_good_by_value || {}) };
+          for (const k of DEFAULT_VALUES) {
+            const n = typeof ne[k] === "string" ? ne[k] : "";
+            if (n.trim()) names[k] = n;
+            else delete names[k];
+            if (ne[`${k}_trend`] === false) trends[k] = false;
+            else delete trends[k];
+            if (["percent", "absolute", "both"].includes(ne[`${k}_trend_display`])) displays[k] = ne[`${k}_trend_display`];
+            else delete displays[k];
+            colors[k] = ne[`${k}_trend_colors`] === true;
+            if (["none", "up", "down"].includes(ne[`${k}_trend_good`])) good[k] = ne[`${k}_trend_good`];
+            else delete good[k];
+          }
+          next.names = names;
+          next.trends = trends;
+          next.trend_display_by_value = displays;
+          next.trend_colors_by_value = colors;
+          next.trend_good_by_value = good;
+        }
         const bg = next.bg_edit;
         delete next.bg_edit;
         if (bg) {
@@ -1076,7 +1397,6 @@ class EnergyValuesCardEditor extends HTMLElement {
       show_selector: t.ed_selector,
       show_date: t.ed_date,
       show_icons: t.ed_icons,
-      names: t.ed_names,
       water_unit: t.ed_water_unit,
       gas_unit: t.ed_gas_unit,
       volume_decimals: t.ed_volume_decimals,
@@ -1086,6 +1406,10 @@ class EnergyValuesCardEditor extends HTMLElement {
     for (const k of DEFAULT_VALUES) {
       labels[k] = t[k];
       labels[`${k}_alpha`] = t.ed_alpha;
+      labels[`${k}_trend`] = t.cv_show_trend;
+      labels[`${k}_trend_display`] = t.cv_trend_display;
+      labels[`${k}_trend_colors`] = t.cv_trend_colors;
+      labels[`${k}_trend_good`] = t.cv_trend_good;
     }
     this._form.hass = this._hass;
     this._form.data = {
@@ -1102,6 +1426,15 @@ class EnergyValuesCardEditor extends HTMLElement {
       ...this._config,
       values_sel: Object.fromEntries(
         DEFAULT_VALUES.map((k) => [k, (Array.isArray(this._config.values) ? this._config.values : DEFAULT_VALUES).includes(k)])
+      ),
+      names_edit: Object.fromEntries(
+        DEFAULT_VALUES.flatMap((k) => [
+          [k, this._config.names?.[k] ?? ""],
+          [`${k}_trend`, this._config.trends?.[k] !== false],
+          [`${k}_trend_display`, this._config.trend_display_by_value?.[k] ?? "percent"],
+          [`${k}_trend_colors`, this._config.trend_colors_by_value?.[k] !== false],
+          [`${k}_trend_good`, this._config.trend_good_by_value?.[k] ?? TREND_GOOD[k] ?? "none"],
+        ])
       ),
       bg_edit: Object.fromEntries(
         DEFAULT_VALUES.flatMap((k) => {
@@ -1197,15 +1530,64 @@ class EnergyValuesCardEditor extends HTMLElement {
               decimals: { label: t.cv_decimals, selector: { number: { min: 0, max: 6, mode: "box" } } },
               icon: { label: t.cv_icon, selector: { icon: {} } },
               color: { label: t.cv_color, selector: { text: {} } },
+              show_trend: { label: t.cv_show_trend, selector: { boolean: {} } },
+              trend_display: { label: t.cv_trend_display, selector: { select: { mode: "dropdown", options: [
+                { value: "percent", label: t.tr_percent },
+                { value: "absolute", label: t.tr_absolute },
+                { value: "both", label: t.tr_both },
+              ] } } },
+              trend_colors: { label: t.cv_trend_colors, selector: { boolean: {} } },
+              trend_good: {
+                label: t.cv_trend_good,
+                selector: {
+                  select: {
+                    mode: "dropdown",
+                    options: [
+                      { value: "none", label: t.tg_none },
+                      { value: "up", label: t.tg_up },
+                      { value: "down", label: t.tg_down },
+                    ],
+                  },
+                },
+              },
             },
           },
         },
       },
       {
         type: "expandable",
-        name: "names",
+        name: "names_edit",
         title: t.ed_names,
-        schema: DEFAULT_VALUES.map((k) => ({ name: k, selector: { text: {} } })),
+        schema: DEFAULT_VALUES.flatMap((k, index) => [
+          ...(index > 0 ? [{ type: "divider" }] : []),
+          {
+            type: "grid",
+            name: "",
+            schema: [
+              { name: k, selector: { text: {} } },
+              { name: `${k}_trend`, selector: { boolean: {} } },
+              ...(PCT_KEYS.has(k) ? [] : [{
+                name: `${k}_trend_display`,
+                selector: {
+                  select: {
+                    mode: "dropdown",
+                    options: [
+                      { value: "percent", label: t.tr_percent },
+                      { value: "absolute", label: t.tr_absolute },
+                      { value: "both", label: t.tr_both },
+                    ],
+                  },
+                },
+              }]),
+              { name: `${k}_trend_colors`, selector: { boolean: {} } },
+              { name: `${k}_trend_good`, selector: { select: { mode: "dropdown", options: [
+                { value: "none", label: t.tg_none },
+                { value: "up", label: t.tg_up },
+                { value: "down", label: t.tg_down },
+              ] } } },
+            ],
+          },
+        ]),
       },
       {
         type: "expandable",
