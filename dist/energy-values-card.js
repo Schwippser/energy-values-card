@@ -1,5 +1,5 @@
 /*
- * energy-values-card  (v0.1.3-prerelease)
+ * energy-values-card  (v1.0.0)
  * Home Assistant Custom Card: zeigt Verbrauch, Netzbezug, Einspeisung, Solar und
  * Batteriespeicher aus dem Energy-Dashboard an. Die Werte sind auswählbar und die
  * Card reagiert auf die energy-date-selection.
@@ -42,7 +42,8 @@
  *         icon: mdi:heat-pump         # optional
  *         color: "#ff7043"            # optional (Icon-Farbe)
  *         trend_good: none            # optional: up (Anstieg ist gut) | down (Rückgang ist gut) | none
- *         show_trend: true            # optional: false = kein Trend für diesen Wert
+ *         show_trend: true            # optional: false = keinen Trendtext anzeigen
+ *         show_trendline: true         # optional: false = keine Trendlinie anzeigen
  *         background_color: "#223344" # optional
  *     names:                # optionale eigene Bezeichnungen je Wert
  *       consumption: Haus
@@ -59,7 +60,7 @@
  *     collection_key: null  # nur nötig, wenn die energy-date-selection einen collection_key hat
  */
 
-const CARD_VERSION = "0.1.3-prerelease";
+const CARD_VERSION = "1.0.0";
 
 const DEFAULT_VALUES = [
   "consumption",
@@ -116,6 +117,7 @@ const I18N = {
     prev_period: "Vorperiode",
     ed_trend_short: "Trend",
     cv_show_trend: "Trend anzeigen",
+    cv_show_trendline: "Trendlinie anzeigen",
     tr_percent: "Prozent",
     tr_absolute: "Absolute Differenz",
     tr_both: "Beides",
@@ -178,6 +180,7 @@ const I18N = {
     prev_period: "Previous period",
     ed_trend_short: "Trend",
     cv_show_trend: "Show trend",
+    cv_show_trendline: "Show trendline",
     tr_percent: "Percent",
     tr_absolute: "Absolute difference",
     tr_both: "Both",
@@ -243,16 +246,67 @@ function cssColor(v) {
   return null;
 }
 
-/** Hintergrundfarbe eines Werts inkl. optionaler Deckkraft (0-1) oder null. */
+
+/** Prüft einen RGBA-Farbwert im Format rgba(r, g, b, a). */
+function isRgbaColor(value) {
+  if (typeof value !== "string") return false;
+  const match = value.trim().match(/^rgba\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(0(?:\.\d+)?|1(?:\.0+)?)\s*\)$/i);
+  return !!match && match.slice(1, 4).every((channel) => Number(channel) >= 0 && Number(channel) <= 255);
+}
+
+/** Wandelt ältere Farbwerte nach Möglichkeit in rgba(...) für das Editorfeld um. */
+function editorRgbaColor(value, legacyOpacity) {
+  let rgb = null;
+  let alpha = 1;
+  if (Array.isArray(value) && value.length >= 3) {
+    rgb = value.slice(0, 3).map(Number);
+    if (value.length >= 4 && value[3] != null) alpha = Number(value[3]);
+  } else if (typeof value === "string") {
+    const color = value.trim();
+    let match = color.match(/^rgba\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(0(?:\.\d+)?|1(?:\.0+)?)\s*\)$/i);
+    if (match) {
+      rgb = match.slice(1, 4).map(Number);
+      alpha = Number(match[4]);
+    } else {
+      match = color.match(/^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/i);
+      if (match) rgb = match.slice(1, 4).map(Number);
+      else {
+        match = color.match(/^#([0-9a-f]{6})$/i);
+        if (match) rgb = [0, 2, 4].map((i) => parseInt(match[1].slice(i, i + 2), 16));
+        else {
+          match = color.match(/^#([0-9a-f]{3})$/i);
+          if (match) rgb = match[1].split("").map((channel) => parseInt(channel + channel, 16));
+        }
+      }
+    }
+  }
+  if (!rgb || !rgb.every((n) => Number.isFinite(n) && n >= 0 && n <= 255)) {
+    // Keep non-empty text while the user is typing an rgba(...) value.
+    // cssColor() ignores incomplete/invalid CSS colors for card rendering.
+    return typeof value === "string" ? value : "";
+  }
+  if (!Number.isFinite(alpha)) alpha = 1;
+  if (legacyOpacity != null && legacyOpacity !== "" && Number.isFinite(Number(legacyOpacity))) {
+    let opacity = Number(legacyOpacity);
+    if (opacity > 1) opacity /= 100;
+    alpha *= Math.max(0, Math.min(1, opacity));
+  }
+  return `rgba(${rgb.map(Math.round).join(", ")}, ${Math.max(0, Math.min(1, alpha))})`;
+}
+
+/** Hintergrundfarbe eines Werts; Transparenz wird direkt über rgba(...) definiert. */
 function backgroundFor(config, key) {
   const color = cssColor(config.background_colors?.[key]);
   if (!color) return null;
+  // New rgba(...) values carry their own alpha; only legacy non-rgba colors
+  // still use the old separate background_opacity option.
+  if (/^rgba\(/i.test(String(config.background_colors?.[key] || "").trim())) return color;
   const raw = config.background_opacity?.[key];
   if (raw == null || raw === "" || Number.isNaN(Number(raw))) return color;
-  let a = Number(raw);
-  if (a > 1) a /= 100;
-  a = Math.max(0, Math.min(1, a));
-  return a >= 1 ? color : `color-mix(in srgb, ${color} ${Math.round(a * 100)}%, transparent)`;
+  let alpha = Number(raw);
+  if (alpha > 1) alpha /= 100;
+  alpha = Math.max(0, Math.min(1, alpha));
+  return alpha >= 1 ? color : `color-mix(in srgb, ${color} ${Math.round(alpha * 100)}%, transparent)`;
 }
 
 const DAY = 86400000;
@@ -911,8 +965,14 @@ class EnergyValuesCard extends HTMLElement {
         // Tageswerte der letzten sieben Tage (einschließlich heute) für die Mini-Liniendiagramme.
         let weekly = {};
         const graphWanted =
-          (cfg.values || []).some((k) => VALUES[k] && cfg.trends?.[k] !== false) ||
-          customs.some((cv) => cv.show_trend !== false && cfg.trends?.[cv.key] !== false);
+          (cfg.values || []).some((k) =>
+            VALUES[k] &&
+            (cfg.trends?.[k] !== false || cfg.show_trendline_by_value?.[k] !== false)
+          ) ||
+          customs.some((cv) =>
+            (cv.show_trend !== false && cfg.trends?.[cv.key] !== false) ||
+            cv.show_trendline !== false
+          );
         if (graphWanted) {
           try {
             const weekEnd = endOfDay(new Date());
@@ -1136,9 +1196,9 @@ class EnergyValuesCard extends HTMLElement {
 
     /** Kleine SVG-Linie für die letzten sieben Tage. */
     const sparklineHtml = (k) => {
-      if (c.layout === "compact" || c.trends?.[k] === false) return "";
+      if (c.layout === "compact" || c.show_trendline_by_value?.[k] === false) return "";
       const cv = customMap.get(k);
-      if (cv?.show_trend === false) return "";
+      if (cv?.show_trendline === false) return "";
       const values = d?.weekly?.[k];
       if (!Array.isArray(values) || values.length < 2) return "";
       const nums = values.map((v) => Number.isFinite(v) ? v : null);
@@ -1345,6 +1405,150 @@ class EnergyValuesCardEditor extends HTMLElement {
     this._render();
   }
 
+  _bindValueDragHandles() {
+    if (!this._form?.shadowRoot) return;
+
+    const expandables = [];
+    const scan = (root) => {
+      for (const element of root.querySelectorAll?.("*") || []) {
+        if (element.localName === "ha-form-expandable") expandables.push(element);
+        if (element.shadowRoot) scan(element.shadowRoot);
+      }
+    };
+    scan(this._form.shadowRoot);
+
+    for (const expandable of expandables) {
+      const schemaName = expandable.schema?.name;
+      if (!schemaName || !schemaName.endsWith("_section")) continue;
+      const valueKey = schemaName.slice(0, -"_section".length);
+      if (!DEFAULT_VALUES.includes(valueKey)) continue;
+
+      Promise.resolve(expandable.updateComplete).then(() => {
+        const handle = expandable.shadowRoot?.querySelector('ha-icon[slot="leading-icon"]');
+        const panel = expandable.shadowRoot?.querySelector("ha-expansion-panel");
+        if (!handle || !panel) return;
+
+        return Promise.resolve(panel.updateComplete).then(() => {
+          const summary = panel.shadowRoot?.querySelector("#summary");
+          if (!summary) return;
+
+          if (handle.dataset.energyValueDragBound !== "true") {
+            handle.dataset.energyValueDragBound = "true";
+            handle.draggable = true;
+            handle.style.cursor = "grab";
+            handle.style.display = "inline-flex";
+            handle.style.alignItems = "center";
+            handle.style.justifyContent = "center";
+            handle.style.width = "36px";
+            handle.style.height = "36px";
+            handle.style.marginInlineEnd = "8px";
+            handle.style.borderRadius = "8px";
+            handle.style.touchAction = "none";
+            handle.title = "Value per Drag-and-drop verschieben";
+            handle.setAttribute("aria-label", "Value verschieben");
+
+            handle.addEventListener("dragstart", (event) => {
+              const currentName = expandable.schema?.name || "";
+              const key = currentName.endsWith("_section")
+                ? currentName.slice(0, -"_section".length)
+                : "";
+              if (!DEFAULT_VALUES.includes(key)) {
+                event.preventDefault();
+                return;
+              }
+              this._draggedValueKey = key;
+              event.dataTransfer.effectAllowed = "move";
+              event.dataTransfer.setData("text/plain", key);
+              expandable.style.opacity = "0.45";
+              handle.style.cursor = "grabbing";
+            });
+
+            handle.addEventListener("dragend", () => {
+              this._draggedValueKey = null;
+              expandable.style.opacity = "";
+              handle.style.cursor = "grab";
+              for (const el of expandables) {
+                el.style.outline = "";
+                el.style.outlineOffset = "";
+              }
+            });
+          }
+
+          if (summary.dataset.energyValueDropBound !== "true") {
+            summary.dataset.energyValueDropBound = "true";
+            summary.addEventListener("dragover", (event) => {
+              event.preventDefault();
+              if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+              if (this._draggedValueKey && this._draggedValueKey !== valueKey) {
+                expandable.style.outline = "2px dashed var(--primary-color)";
+                expandable.style.outlineOffset = "-2px";
+              }
+            });
+            summary.addEventListener("dragleave", (event) => {
+              if (!summary.contains(event.relatedTarget)) {
+                expandable.style.outline = "";
+                expandable.style.outlineOffset = "";
+              }
+            });
+            summary.addEventListener("drop", (event) => {
+              for (const el of expandables) {
+                el.style.outline = "";
+                el.style.outlineOffset = "";
+              }
+              event.preventDefault();
+              const currentName = expandable.schema?.name || "";
+              const targetKey = currentName.endsWith("_section")
+                ? currentName.slice(0, -"_section".length)
+                : "";
+              const sourceKey = event.dataTransfer?.getData("text/plain") || this._draggedValueKey;
+              if (
+                !DEFAULT_VALUES.includes(sourceKey) ||
+                !DEFAULT_VALUES.includes(targetKey) ||
+                sourceKey === targetKey
+              ) return;
+
+              const configuredOrder = Array.isArray(this._config?.value_order)
+                ? this._config.value_order.filter((key) => DEFAULT_VALUES.includes(key))
+                : [...DEFAULT_VALUES];
+              const order = [...new Set([...configuredOrder, ...DEFAULT_VALUES])];
+              const from = order.indexOf(sourceKey);
+              const to = order.indexOf(targetKey);
+              if (from < 0 || to < 0) return;
+
+              const [moved] = order.splice(from, 1);
+              order.splice(to, 0, moved);
+
+              const previousValues = Array.isArray(this._config.values)
+                ? [...this._config.values]
+                : [...DEFAULT_VALUES];
+              const enabledInNewOrder = order.filter((key) => previousValues.includes(key));
+              let enabledIndex = 0;
+              const reorderedValues = previousValues.map((key) =>
+                DEFAULT_VALUES.includes(key)
+                  ? (enabledInNewOrder[enabledIndex++] ?? key)
+                  : key
+              );
+
+              const next = {
+                ...this._config,
+                value_order: order,
+                values: reorderedValues,
+              };
+              this._config = next;
+              this._render();
+              this.dispatchEvent(new CustomEvent("config-changed", {
+                detail: { config: next },
+                bubbles: true,
+                composed: true,
+              }));
+            });
+          }
+        });
+      });
+    }
+  }
+
+
   _render() {
     if (!this._config) return;
     const t = tr(this._hass?.locale?.language || this._hass?.language);
@@ -1363,13 +1567,17 @@ class EnergyValuesCardEditor extends HTMLElement {
         if (ve) {
           const prev = Array.isArray(this._config?.values) ? this._config.values : DEFAULT_VALUES;
           const kept = prev.filter((k) => !VALUES[k] || ve[`${k}_enabled`] !== false);
-          for (const k of DEFAULT_VALUES) {
+          const preferredOrder = Array.isArray(this._config?.value_order)
+            ? [...this._config.value_order.filter((k) => DEFAULT_VALUES.includes(k)), ...DEFAULT_VALUES]
+            : [...DEFAULT_VALUES];
+          for (const k of [...new Set(preferredOrder)]) {
             if (ve[`${k}_enabled`] !== false && !kept.includes(k)) kept.push(k);
           }
           next.values = kept;
 
           const names = { ...(this._config?.names || {}) };
           const trends = { ...(this._config?.trends || {}) };
+          const trendlines = { ...(this._config?.show_trendline_by_value || {}) };
           const displays = { ...(this._config?.trend_display_by_value || {}) };
           const trendColors = { ...(this._config?.trend_colors_by_value || {}) };
           const good = { ...(this._config?.trend_good_by_value || {}) };
@@ -1388,6 +1596,8 @@ class EnergyValuesCardEditor extends HTMLElement {
             else delete names[k];
             if (ve[`${k}_trend`] === false) trends[k] = false;
             else delete trends[k];
+            if (ve[`${k}_trendline`] === false) trendlines[k] = false;
+            else delete trendlines[k];
             if (["percent", "absolute", "both"].includes(ve[`${k}_trend_display`])) displays[k] = ve[`${k}_trend_display`];
             else delete displays[k];
             trendColors[k] = ve[`${k}_trend_colors`] === true;
@@ -1396,14 +1606,21 @@ class EnergyValuesCardEditor extends HTMLElement {
             const dv = ve[`${k}_decimals`];
             if (typeof dv === "number" && Number.isFinite(dv)) decimalsBy[k] = Math.max(0, Math.min(6, Math.round(dv)));
             else delete decimalsBy[k];
-            if (Array.isArray(ve[`${k}_bg`])) backgrounds[k] = ve[`${k}_bg`];
-            else if (typeof backgrounds[k] !== "string") delete backgrounds[k];
-            const a = ve[`${k}_alpha`];
-            if (typeof a === "number" && a < 1) opacity[k] = a;
-            else delete opacity[k];
+            const rgba = typeof ve[`${k}_bg`] === "string" ? ve[`${k}_bg`].trim() : "";
+            if (rgba === "") {
+              delete backgrounds[k];
+            } else {
+              // Auch unvollständige Eingaben zwischenspeichern, damit der Text-Input
+              // während des Tippens nicht durch den letzten gültigen Wert ersetzt wird.
+              // Ungültige CSS-Farben werden von cssColor() bei der Darstellung ignoriert.
+              backgrounds[k] = rgba;
+            }
+            // Transparenz steckt direkt im rgba-Wert; alte separate Deckkraft entfernen.
+            delete opacity[k];
           }
           next.names = names;
           next.trends = trends;
+          next.show_trendline_by_value = trendlines;
           next.trend_display_by_value = displays;
           next.trend_colors_by_value = trendColors;
           next.trend_good_by_value = good;
@@ -1437,9 +1654,9 @@ class EnergyValuesCardEditor extends HTMLElement {
       labels[`${k}_enabled`] = "Anzeigen";
       labels[`${k}_icon_enabled`] = t.cv_show_icon;
       labels[`${k}_icon`] = t.cv_icon;
-      labels[`${k}_bg`] = t.ed_bg_color;
-      labels[`${k}_alpha`] = t.ed_alpha;
+      labels[`${k}_bg`] = "Hintergrundfarbe (rgba)";
       labels[`${k}_trend`] = t.cv_show_trend;
+      labels[`${k}_trendline`] = t.cv_show_trendline;
       labels[`${k}_trend_display`] = t.cv_trend_display;
       labels[`${k}_trend_colors`] = t.cv_trend_colors;
       labels[`${k}_trend_good`] = t.cv_trend_good;
@@ -1455,20 +1672,22 @@ class EnergyValuesCardEditor extends HTMLElement {
       water_unit: "m³",
       gas_unit: "m³",
       ...this._config,
-      custom_values: (this._config.custom_values || []).map((cv) => ({ ...cv, show_icon: cv.show_icon !== false })),
+      custom_values: (this._config.custom_values || []).map((cv) => ({
+        ...cv,
+        show_icon: cv.show_icon !== false,
+        show_trendline: cv.show_trendline !== false,
+      })),
       values_edit: Object.fromEntries(
         DEFAULT_VALUES.flatMap((k) => {
           const col = this._config.background_colors?.[k];
-          const a = Number(this._config.background_opacity?.[k]);
-          const alpha = this._config.background_opacity?.[k] != null && Number.isFinite(a) ? Math.max(0, Math.min(1, a > 1 ? a / 100 : a)) : 1;
           return [
             [`${k}_enabled`, (Array.isArray(this._config.values) ? this._config.values : DEFAULT_VALUES).includes(k)],
             [`${k}_icon_enabled`, this._config.show_icons_by_value?.[k] !== false],
             [`${k}_icon`, this._config.icons?.[k] ?? ""],
             [k, this._config.names?.[k] ?? ""],
-            [`${k}_bg`, Array.isArray(col) ? col : undefined],
-            [`${k}_alpha`, alpha],
+            [`${k}_bg`, editorRgbaColor(col, this._config.background_opacity?.[k])],
             [`${k}_trend`, this._config.trends?.[k] !== false],
+            [`${k}_trendline`, this._config.show_trendline_by_value?.[k] !== false],
             [`${k}_trend_display`, this._config.trend_display_by_value?.[k] ?? "percent"],
             [`${k}_trend_colors`, this._config.trend_colors_by_value?.[k] !== false],
             [`${k}_trend_good`, this._config.trend_good_by_value?.[k] ?? TREND_GOOD[k] ?? "none"],
@@ -1480,6 +1699,12 @@ class EnergyValuesCardEditor extends HTMLElement {
         })
       ),
     };
+    const valueOrder = [...new Set([
+      ...(Array.isArray(this._config.value_order)
+        ? this._config.value_order.filter((key) => DEFAULT_VALUES.includes(key))
+        : DEFAULT_VALUES),
+      ...DEFAULT_VALUES,
+    ])];
     this._form.schema = [
       { name: "title", selector: { text: {} } },
       { name: "show_title", selector: { boolean: {} } },
@@ -1505,6 +1730,56 @@ class EnergyValuesCardEditor extends HTMLElement {
       },
       { name: "show_date", selector: { boolean: {} } },
       { name: "show_selector", selector: { boolean: {} } },
+      {
+        type: "expandable",
+        name: "values_edit",
+        title: "Energie-Werte",
+        expanded: true,
+        schema: valueOrder.flatMap((k, index) => [
+          ...(index > 0 ? [{ type: "divider" }] : []),
+          {
+            type: "expandable",
+            name: `${k}_section`,
+            title: t[k] || k,
+            icon: "mdi:drag",
+            expanded: false,
+            // Die Felder bleiben durch flatten direkt in values_edit erhalten.
+            flatten: true,
+            schema: [
+              {
+                type: "grid",
+                name: "",
+                flatten: true,
+                column_min_width: "150px",
+                schema: [
+                  { name: `${k}_enabled`, selector: { boolean: {} } },
+                  { name: `${k}_icon_enabled`, selector: { boolean: {} } },
+                  { name: `${k}_icon`, selector: { icon: {} } },
+                  { name: k, selector: { text: {} } },
+                  ...(k === "gas" || k === "water"
+                    ? [{ name: `${k}_unit`, selector: { select: { mode: "dropdown", options: [{ value: "m³", label: "m³" }, { value: "L", label: "L" }] } } }]
+                    : []),
+                  { name: `${k}_decimals`, selector: { number: { min: 0, max: 6, mode: "box" } } },
+                  { name: `${k}_bg`, selector: { text: {} } },
+                  { name: `${k}_trend`, selector: { boolean: {} } },
+                  { name: `${k}_trendline`, selector: { boolean: {} } },
+                  ...(PCT_KEYS.has(k) ? [] : [{ name: `${k}_trend_display`, selector: { select: { mode: "dropdown", options: [
+                    { value: "percent", label: t.tr_percent },
+                    { value: "absolute", label: t.tr_absolute },
+                    { value: "both", label: t.tr_both },
+                  ] } } }]),
+                  { name: `${k}_trend_colors`, selector: { boolean: {} } },
+                  { name: `${k}_trend_good`, selector: { select: { mode: "dropdown", options: [
+                    { value: "none", label: t.tg_none },
+                    { value: "up", label: t.tg_up },
+                    { value: "down", label: t.tg_down },
+                  ] } } },
+                ],
+              },
+            ],
+          },
+        ]),
+      },
       {
         name: "custom_values",
         selector: {
@@ -1537,6 +1812,7 @@ class EnergyValuesCardEditor extends HTMLElement {
               show_icon: { label: t.cv_show_icon, selector: { boolean: {} } },
               color: { label: t.cv_color, selector: { text: {} } },
               show_trend: { label: t.cv_show_trend, selector: { boolean: {} } },
+              show_trendline: { label: t.cv_show_trendline, selector: { boolean: {} } },
               trend_display: { label: t.cv_trend_display, selector: { select: { mode: "dropdown", options: [
                 { value: "percent", label: t.tr_percent },
                 { value: "absolute", label: t.tr_absolute },
@@ -1560,57 +1836,9 @@ class EnergyValuesCardEditor extends HTMLElement {
           },
         },
       },
-      {
-        type: "expandable",
-        name: "values_edit",
-        title: "Werte bearbeiten",
-        expanded: true,
-        schema: DEFAULT_VALUES.flatMap((k, index) => [
-          ...(index > 0 ? [{ type: "divider" }] : []),
-          {
-            type: "expandable",
-            name: `${k}_section`,
-            title: t[k] || k,
-            expanded: true,
-            // Die Felder bleiben durch flatten direkt in values_edit erhalten.
-            flatten: true,
-            schema: [
-              {
-                type: "grid",
-                name: "",
-                flatten: true,
-                column_min_width: "150px",
-                schema: [
-                  { name: `${k}_enabled`, selector: { boolean: {} } },
-                  { name: `${k}_icon_enabled`, selector: { boolean: {} } },
-                  { name: `${k}_icon`, selector: { icon: {} } },
-                  { name: k, selector: { text: {} } },
-                  ...(k === "gas" || k === "water"
-                    ? [{ name: `${k}_unit`, selector: { select: { mode: "dropdown", options: [{ value: "m³", label: "m³" }, { value: "L", label: "L" }] } } }]
-                    : []),
-                  { name: `${k}_decimals`, selector: { number: { min: 0, max: 6, mode: "box" } } },
-                  { name: `${k}_bg`, selector: { color_rgb: {} } },
-                  { name: `${k}_alpha`, selector: { number: { min: 0, max: 1, step: 0.05, mode: "slider" } } },
-                  { name: `${k}_trend`, selector: { boolean: {} } },
-                  ...(PCT_KEYS.has(k) ? [] : [{ name: `${k}_trend_display`, selector: { select: { mode: "dropdown", options: [
-                    { value: "percent", label: t.tr_percent },
-                    { value: "absolute", label: t.tr_absolute },
-                    { value: "both", label: t.tr_both },
-                  ] } } }]),
-                  { name: `${k}_trend_colors`, selector: { boolean: {} } },
-                  { name: `${k}_trend_good`, selector: { select: { mode: "dropdown", options: [
-                    { value: "none", label: t.tg_none },
-                    { value: "up", label: t.tg_up },
-                    { value: "down", label: t.tg_down },
-                  ] } } },
-                ],
-              },
-            ],
-          },
-        ]),
-      },
     ];
     this._form.computeLabel = (s) => labels[s.name] || s.name;
+    Promise.resolve(this._form.updateComplete).then(() => this._bindValueDragHandles());
   }
 }
 
