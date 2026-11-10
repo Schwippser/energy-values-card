@@ -1,7 +1,7 @@
 # Energy Values Card
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-![version](https://img.shields.io/badge/version-0.1.3--prerelease-blue)
+[![Home Assistant Marketplace](https://img.shields.io/badge/Home%20Assistant-Marketplace-blue.svg)](https://www.home-assistant.io/integrations/marketplace/)
+![Version](https://img.shields.io/badge/version-1.0.0-blue)
 
 [English version](README.md)
 
