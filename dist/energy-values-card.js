@@ -1,5 +1,5 @@
 /*
- * energy-values-card  (v0.1.2-prerelease)
+ * energy-values-card  (v0.1.3-prerelease)
  * Home Assistant Custom Card: zeigt Verbrauch, Netzbezug, Einspeisung, Solar und
  * Batteriespeicher aus dem Energy-Dashboard an. Die Werte sind auswählbar und die
  * Card reagiert auf die energy-date-selection.
@@ -29,8 +29,9 @@
  *       solar: false
  *     water_unit: m³        # m³ | L  (Einheit des Wasserverbrauchs)
  *     gas_unit: m³          # m³ | L  (Einheit des Gasverbrauchs, nur bei Gas in Volumeneinheiten, nicht bei kWh)
- *     volume_decimals: 2    # Nachkommastellen für Gas/Wasser in m³
- *     liter_decimals: 0     # Nachkommastellen für Gas/Wasser in Litern
+ *     decimals_by_value:    # Dezimalstellen je Wert (ohne Eintrag: decimals; bei % 0, Gas/Wasser in m³ 2, in L 0)
+ *       water: 3
+ *       solar: 2
  *     custom_values:        # eigene Entitäten als zusätzliche Werte, folgen der energy-date-selection
  *       - entity: sensor.waermepumpe_energie   # braucht Langzeitstatistiken (state_class)
  *         name: Wärmepumpe            # optional
@@ -58,7 +59,7 @@
  *     collection_key: null  # nur nötig, wenn die energy-date-selection einen collection_key hat
  */
 
-const CARD_VERSION = "0.1.2-prerelease";
+const CARD_VERSION = "0.1.3-prerelease";
 
 const DEFAULT_VALUES = [
   "consumption",
@@ -134,10 +135,8 @@ const I18N = {
     ed_bg_combined: "Hintergrundfarben und Deckkraft der Werte",
     ed_bg_color: "Hintergrundfarbe",
     ed_names: "Bezeichnungen der Werte (leer = Standard)",
-    ed_water_unit: "Einheit Wasserverbrauch",
-    ed_gas_unit: "Einheit Gasverbrauch",
-    ed_volume_decimals: "Nachkommastellen Gas/Wasser (m³)",
-    ed_liter_decimals: "Nachkommastellen Gas/Wasser (Liter)",
+    ed_unit: "Einheit",
+    ed_decimals_value: "Dezimalstellen (leer = Standard)",
     ed_custom: "Eigene Werte (Entitäten)",
     cv_entity: "Entität",
     cv_name: "Name",
@@ -149,7 +148,7 @@ const I18N = {
     st_max: "Maximum",
     st_state: "Letzter Wert",
     cv_unit: "Einheit (optional)",
-    cv_decimals: "Nachkommastellen",
+    cv_decimals: "Dezimalstellen",
     cv_icon: "Icon",
     cv_color: "Farbe",
     ed_alpha: "Deckkraft",
@@ -198,10 +197,8 @@ const I18N = {
     ed_bg_combined: "Background colors and opacity of the values",
     ed_bg_color: "Background color",
     ed_names: "Names of the values (empty = default)",
-    ed_water_unit: "Water consumption unit",
-    ed_gas_unit: "Gas consumption unit",
-    ed_volume_decimals: "Decimals gas/water (m³)",
-    ed_liter_decimals: "Decimals gas/water (liters)",
+    ed_unit: "Unit",
+    ed_decimals_value: "Decimals (empty = default)",
     ed_custom: "Custom values (entities)",
     cv_entity: "Entity",
     cv_name: "Name",
@@ -588,17 +585,19 @@ class EnergyValuesCard extends HTMLElement {
     const trendDisplayByValue = { ...(config.trend_display_by_value || {}) };
     const trendColorsByValue = { ...(config.trend_colors_by_value || {}) };
     const trendGoodByValue = { ...(config.trend_good_by_value || {}) };
+    const decimalsByValue = { ...(config.decimals_by_value || {}) };
     // Alte globale Optionen einmalig auf die einzelnen Werte übertragen.
     for (const k of DEFAULT_VALUES) {
       if (config.show_trend === false && trends[k] == null) trends[k] = false;
       if (trendDisplayByValue[k] == null && config.trend_display) trendDisplayByValue[k] = config.trend_display;
       if (trendColorsByValue[k] == null && config.trend_colors != null) trendColorsByValue[k] = config.trend_colors;
     }
-    const { show_trend: _oldShowTrend, trend_display: _oldTrendDisplay, trend_colors: _oldTrendColors, ...cleanConfig } = config;
+    // volume_decimals / liter_decimals gibt es nicht mehr (Dezimalstellen je Wert: decimals_by_value)
+    const { show_trend: _oldShowTrend, trend_display: _oldTrendDisplay, trend_colors: _oldTrendColors, volume_decimals: _oldVolumeDecimals, liter_decimals: _oldLiterDecimals, ...cleanConfig } = config;
     this._config = {
       layout: "list", decimals: 1, show_date: true, show_icons: true,
       show_title: true, show_selector: false, water_unit: "m³", gas_unit: "m³",
-      volume_decimals: 2, liter_decimals: 0, debug: false,
+      debug: false,
       ...cleanConfig,
       background_colors: config.background_colors || {},
       background_opacity: config.background_opacity || {},
@@ -606,6 +605,7 @@ class EnergyValuesCard extends HTMLElement {
       trend_display_by_value: trendDisplayByValue,
       trend_colors_by_value: trendColorsByValue,
       trend_good_by_value: trendGoodByValue,
+      decimals_by_value: decimalsByValue,
       values, custom,
     };
     this._loadHidden();
@@ -1212,7 +1212,12 @@ class EnergyValuesCard extends HTMLElement {
         if (typeof pv === "number") pv *= 1000;
         unit = "L";
       }
-      const decimals = isPct ? 0 : unit === "kWh" ? c.decimals : unit === "L" ? c.liter_decimals : c.volume_decimals;
+      // Eigene Dezimalstellen je Wert, sonst: kWh = decimals, % = 0, m³ = 2, L = 0
+      const own = c.decimals_by_value?.[k];
+      const decimals =
+        own != null && own !== "" && Number.isFinite(Number(own))
+          ? Number(own)
+          : isPct ? 0 : unit === "kWh" ? c.decimals : unit === "L" ? 0 : 2;
       return {
         icon: c.icons?.[k] || VALUES[k].icon,
         showIcon: c.show_icons_by_value?.[k] !== false,
@@ -1351,6 +1356,8 @@ class EnergyValuesCardEditor extends HTMLElement {
         delete next.show_trend;
         delete next.trend_display;
         delete next.trend_colors;
+        delete next.volume_decimals;
+        delete next.liter_decimals;
         const ve = next.values_edit;
         delete next.values_edit;
         if (ve) {
@@ -1368,6 +1375,7 @@ class EnergyValuesCardEditor extends HTMLElement {
           const good = { ...(this._config?.trend_good_by_value || {}) };
           const backgrounds = { ...(this._config?.background_colors || {}) };
           const icons = { ...(this._config?.icons || {}) };
+          const decimalsBy = { ...(this._config?.decimals_by_value || {}) };
           const iconVisibility = { ...(this._config?.show_icons_by_value || {}) };
           const opacity = { ...(this._config?.background_opacity || {}) };
           for (const k of DEFAULT_VALUES) {
@@ -1385,6 +1393,9 @@ class EnergyValuesCardEditor extends HTMLElement {
             trendColors[k] = ve[`${k}_trend_colors`] === true;
             if (["none", "up", "down"].includes(ve[`${k}_trend_good`])) good[k] = ve[`${k}_trend_good`];
             else delete good[k];
+            const dv = ve[`${k}_decimals`];
+            if (typeof dv === "number" && Number.isFinite(dv)) decimalsBy[k] = Math.max(0, Math.min(6, Math.round(dv)));
+            else delete decimalsBy[k];
             if (Array.isArray(ve[`${k}_bg`])) backgrounds[k] = ve[`${k}_bg`];
             else if (typeof backgrounds[k] !== "string") delete backgrounds[k];
             const a = ve[`${k}_alpha`];
@@ -1397,6 +1408,9 @@ class EnergyValuesCardEditor extends HTMLElement {
           next.trend_colors_by_value = trendColors;
           next.trend_good_by_value = good;
           next.icons = icons;
+          next.decimals_by_value = decimalsBy;
+          if (["m³", "L"].includes(ve.gas_unit)) next.gas_unit = ve.gas_unit;
+          if (["m³", "L"].includes(ve.water_unit)) next.water_unit = ve.water_unit;
           next.show_icons_by_value = iconVisibility;
           next.background_colors = backgrounds;
           next.background_opacity = opacity;
@@ -1414,10 +1428,8 @@ class EnergyValuesCardEditor extends HTMLElement {
       show_selector: t.ed_selector,
       show_date: t.ed_date,
       show_icons: t.ed_icons,
-      water_unit: t.ed_water_unit,
-      gas_unit: t.ed_gas_unit,
-      volume_decimals: t.ed_volume_decimals,
-      liter_decimals: t.ed_liter_decimals,
+      water_unit: t.ed_unit,
+      gas_unit: t.ed_unit,
       custom_values: t.ed_custom,
     };
     for (const k of DEFAULT_VALUES) {
@@ -1431,6 +1443,7 @@ class EnergyValuesCardEditor extends HTMLElement {
       labels[`${k}_trend_display`] = t.cv_trend_display;
       labels[`${k}_trend_colors`] = t.cv_trend_colors;
       labels[`${k}_trend_good`] = t.cv_trend_good;
+      labels[`${k}_decimals`] = t.ed_decimals_value;
     }
     this._form.hass = this._hass;
     this._form.data = {
@@ -1441,8 +1454,6 @@ class EnergyValuesCardEditor extends HTMLElement {
       show_selector: false,
       water_unit: "m³",
       gas_unit: "m³",
-      volume_decimals: 2,
-      liter_decimals: 0,
       ...this._config,
       custom_values: (this._config.custom_values || []).map((cv) => ({ ...cv, show_icon: cv.show_icon !== false })),
       values_edit: Object.fromEntries(
@@ -1461,6 +1472,10 @@ class EnergyValuesCardEditor extends HTMLElement {
             [`${k}_trend_display`, this._config.trend_display_by_value?.[k] ?? "percent"],
             [`${k}_trend_colors`, this._config.trend_colors_by_value?.[k] !== false],
             [`${k}_trend_good`, this._config.trend_good_by_value?.[k] ?? TREND_GOOD[k] ?? "none"],
+            [`${k}_decimals`, this._config.decimals_by_value?.[k] ?? undefined],
+            ...(k === "gas" || k === "water"
+              ? [[`${k}_unit`, /^(l|liter|litre)$/i.test(String(this._config[`${k}_unit`] ?? "").trim()) ? "L" : "m³"]]
+              : []),
           ];
         })
       ),
@@ -1486,22 +1501,6 @@ class EnergyValuesCardEditor extends HTMLElement {
             },
           },
           { name: "decimals", selector: { number: { min: 0, max: 3, mode: "box" } } },
-        ],
-      },
-      {
-        type: "grid",
-        name: "",
-        schema: [
-          {
-            name: "gas_unit",
-            selector: { select: { mode: "dropdown", options: [{ value: "m³", label: "m³" }, { value: "L", label: "L" }] } },
-          },
-          {
-            name: "water_unit",
-            selector: { select: { mode: "dropdown", options: [{ value: "m³", label: "m³" }, { value: "L", label: "L" }] } },
-          },
-          { name: "volume_decimals", selector: { number: { min: 0, max: 4, mode: "box" } } },
-          { name: "liter_decimals", selector: { number: { min: 0, max: 4, mode: "box" } } },
         ],
       },
       { name: "show_date", selector: { boolean: {} } },
@@ -1586,6 +1585,10 @@ class EnergyValuesCardEditor extends HTMLElement {
                   { name: `${k}_icon_enabled`, selector: { boolean: {} } },
                   { name: `${k}_icon`, selector: { icon: {} } },
                   { name: k, selector: { text: {} } },
+                  ...(k === "gas" || k === "water"
+                    ? [{ name: `${k}_unit`, selector: { select: { mode: "dropdown", options: [{ value: "m³", label: "m³" }, { value: "L", label: "L" }] } } }]
+                    : []),
+                  { name: `${k}_decimals`, selector: { number: { min: 0, max: 6, mode: "box" } } },
                   { name: `${k}_bg`, selector: { color_rgb: {} } },
                   { name: `${k}_alpha`, selector: { number: { min: 0, max: 1, step: 0.05, mode: "slider" } } },
                   { name: `${k}_trend`, selector: { boolean: {} } },
