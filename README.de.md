@@ -32,7 +32,7 @@ Eine Dashboard-Karte für Home Assistant, die auswählbare Werte aus dem **Energ
 
 [![Open your Home Assistant instance and open this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=YOUR_GITHUB_USER&repository=energy-values-card&category=plugin)
 
-1. HACS → ⋮ → **Benutzerdefinierte Repositories**
+1. MARKETPLACE → ⋮ → **Benutzerdefinierte Repositories**
 2. Repository: `https://github.com/YOUR_GITHUB_USER/energy-values-card`, Kategorie **Dashboard**
 3. **Energy Values Card** installieren. Vorabversionen bietet HACS nur an, wenn für das Repository „Beta-Versionen anzeigen" aktiviert ist.
 4. Browser neu laden (ggf. Cache leeren).
