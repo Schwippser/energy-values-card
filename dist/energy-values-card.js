@@ -1,5 +1,5 @@
 /*
- * energy-values-card  (v0.1.1-prerelease)
+ * energy-values-card  (v0.1.2-prerelease)
  * Home Assistant Custom Card: zeigt Verbrauch, Netzbezug, Einspeisung, Solar und
  * Batteriespeicher aus dem Energy-Dashboard an. Die Werte sind auswählbar und die
  * Card reagiert auf die energy-date-selection.
@@ -18,7 +18,7 @@
  *     title: Energie        # eigener Titel (leer lassen = Standardtitel)
  *     show_title: true      # Titel anzeigen
  *     values: [consumption, grid_import, grid_export, solar, battery_charge, battery_discharge, autarky, co2_signal, gas, water]
- *     layout: list          # list | grid
+ *     layout: list          # list | grid | compact
  *     decimals: 1
  *     show_date: true       # Zeitraum (Datum) im Kopf der Card anzeigen
  *     show_icons: true      # Icons der einzelnen Werte anzeigen
@@ -58,7 +58,7 @@
  *     collection_key: null  # nur nötig, wenn die energy-date-selection einen collection_key hat
  */
 
-const CARD_VERSION = "0.1.1-prerelease";
+const CARD_VERSION = "0.1.2-prerelease";
 
 const DEFAULT_VALUES = [
   "consumption",
@@ -130,7 +130,9 @@ const I18N = {
     ed_selector: "Auswahl-Chips in der Card anzeigen",
     ed_date: "Datum anzeigen",
     ed_icons: "Icons anzeigen",
+    cv_show_icon: "Icon anzeigen",
     ed_bg_combined: "Hintergrundfarben und Deckkraft der Werte",
+    ed_bg_color: "Hintergrundfarbe",
     ed_names: "Bezeichnungen der Werte (leer = Standard)",
     ed_water_unit: "Einheit Wasserverbrauch",
     ed_gas_unit: "Einheit Gasverbrauch",
@@ -153,6 +155,7 @@ const I18N = {
     ed_alpha: "Deckkraft",
     ed_list: "Liste",
     ed_grid: "Kacheln",
+    ed_compact: "Kompakt",
   },
   en: {
     title: "Energy",
@@ -191,7 +194,9 @@ const I18N = {
     ed_selector: "Show selection chips in the card",
     ed_date: "Show date",
     ed_icons: "Show icons",
+    cv_show_icon: "Show icon",
     ed_bg_combined: "Background colors and opacity of the values",
+    ed_bg_color: "Background color",
     ed_names: "Names of the values (empty = default)",
     ed_water_unit: "Water consumption unit",
     ed_gas_unit: "Gas consumption unit",
@@ -214,6 +219,7 @@ const I18N = {
     ed_alpha: "Opacity",
     ed_list: "List",
     ed_grid: "Tiles",
+    ed_compact: "Compact",
   },
 };
 
@@ -458,7 +464,17 @@ const CARD_CSS = `
           padding: 12px; border-radius: 12px;
           background: color-mix(in srgb, var(--c) 10%, transparent);
         }
-        .list.no-icon .item {
+        .compact { display: grid; grid-template-columns: repeat(auto-fit, minmax(115px, 1fr)); gap: 5px; }
+        .compact .item {
+          display: flex; flex-direction: row; align-items: center; justify-content: space-between;
+          gap: 6px; min-width: 0; padding: 5px 7px; border-radius: 6px;
+          background: color-mix(in srgb, var(--c) 8%, transparent);
+        }
+        .compact .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+        .compact .value { flex: 0 0 auto; font-size: 14px; white-space: nowrap; }
+        .compact .unit { font-size: 10px; }
+        .compact .item.has-chart { padding-bottom: 5px !important; }
+        .list.no-icon .item, .list .item.no-icon {
           grid-template-columns: 1fr auto;
           grid-template-areas: "l v";
         }
@@ -473,7 +489,7 @@ const CARD_CSS = `
         .value { grid-area: v; font-size: 18px; font-weight: 500; color: var(--primary-text-color); }
         .unit { font-size: 12px; font-weight: 400; color: var(--secondary-text-color); }
         .trend { grid-column: 3; grid-row: 2; justify-self: end; font-size: 12px; white-space: nowrap; color: var(--secondary-text-color); }
-        .list.no-icon .trend { grid-column: 2; }
+        .list.no-icon .trend, .list .item.no-icon .trend { grid-column: 2; }
         .item.has-trend .icon, .item.has-trend .label { grid-row: 1 / span 2; }
         /* Diagramm absolut an der Unterkante verankern: kein Restabstand durch Padding oder Flex/Grid-Gap. */
         .item.has-chart { position: relative; overflow: hidden; padding-bottom: 48px !important; }
@@ -1120,7 +1136,7 @@ class EnergyValuesCard extends HTMLElement {
 
     /** Kleine SVG-Linie für die letzten sieben Tage. */
     const sparklineHtml = (k) => {
-      if (c.trends?.[k] === false) return "";
+      if (c.layout === "compact" || c.trends?.[k] === false) return "";
       const cv = customMap.get(k);
       if (cv?.show_trend === false) return "";
       const values = d?.weekly?.[k];
@@ -1175,6 +1191,7 @@ class EnergyValuesCard extends HTMLElement {
         const text = isNum ? `${esc(fmt(num, dec))}${unit ? `<span class="unit"> ${esc(unit)}</span>` : ""}` : "–";
         return {
           icon: cv.icon || st?.attributes?.icon || "mdi:gauge",
+          showIcon: cv.show_icon !== false,
           color: cssColor(cv.color) || "var(--primary-color, #03a9f4)",
           text,
           trend:
@@ -1197,7 +1214,8 @@ class EnergyValuesCard extends HTMLElement {
       }
       const decimals = isPct ? 0 : unit === "kWh" ? c.decimals : unit === "L" ? c.liter_decimals : c.volume_decimals;
       return {
-        icon: VALUES[k].icon,
+        icon: c.icons?.[k] || VALUES[k].icon,
+        showIcon: c.show_icons_by_value?.[k] !== false,
         color: VALUES[k].color,
         text: `${esc(fmt(v, decimals))}<span class="unit"> ${esc(unit)}</span>`,
         trend: trendHtml(k, v, pv, unit, decimals, c.trend_good_by_value?.[k] ?? TREND_GOOD[k] ?? "none"),
@@ -1219,17 +1237,18 @@ class EnergyValuesCard extends HTMLElement {
     if (!shown.length) {
       if (builtinOk || (!wantsBuiltin && d && !this._error)) body += `<div class="msg">${esc(t.nothing)}</div>`;
     } else {
-      const showIcons = c.show_icons !== false;
-      body += `<div class="${c.layout === "grid" ? "grid" : "list"}${showIcons ? "" : " no-icon"}">${shown
+      const compact = c.layout === "compact";
+      const showIcons = !compact;
+      body += `<div class="${compact ? "compact" : c.layout === "grid" ? "grid" : "list"}${showIcons ? "" : " no-icon"}">${shown
         .map((k) => {
           const it = describe(k);
           const chart = sparklineHtml(k);
           return `
-            <div class="item${it.bg ? " has-bg" : ""}${it.trend ? " has-trend" : ""}${chart ? " has-chart" : ""}" style="--c:${esc(it.color)};${it.bg ? `--bg:${esc(it.bg)};` : ""}">
-              ${showIcons ? `<div class="icon"><ha-icon icon="${esc(it.icon)}"></ha-icon></div>` : ""}
+            <div class="item${!it.showIcon ? " no-icon" : ""}${it.bg ? " has-bg" : ""}${it.trend ? " has-trend" : ""}${chart ? " has-chart" : ""}" style="--c:${esc(it.color)};${it.bg ? `--bg:${esc(it.bg)};` : ""}">
+              ${showIcons && it.showIcon ? `<div class="icon"><ha-icon icon="${esc(it.icon)}"></ha-icon></div>` : ""}
               <div class="label">${esc(label(k))}</div>
               <div class="value">${it.text}</div>
-              ${it.trend || ""}
+              ${compact ? "" : it.trend || ""}
               ${chart}
             </div>`;
         })
@@ -1332,57 +1351,55 @@ class EnergyValuesCardEditor extends HTMLElement {
         delete next.show_trend;
         delete next.trend_display;
         delete next.trend_colors;
-        const sel = next.values_sel;
-        delete next.values_sel;
-        const ne = next.names_edit;
-        delete next.names_edit;
-        if (ne) {
-          // Einträge für eigene Werte (Entitäts-IDs) bleiben unverändert erhalten
+        const ve = next.values_edit;
+        delete next.values_edit;
+        if (ve) {
+          const prev = Array.isArray(this._config?.values) ? this._config.values : DEFAULT_VALUES;
+          const kept = prev.filter((k) => !VALUES[k] || ve[`${k}_enabled`] !== false);
+          for (const k of DEFAULT_VALUES) {
+            if (ve[`${k}_enabled`] !== false && !kept.includes(k)) kept.push(k);
+          }
+          next.values = kept;
+
           const names = { ...(this._config?.names || {}) };
           const trends = { ...(this._config?.trends || {}) };
           const displays = { ...(this._config?.trend_display_by_value || {}) };
-          const colors = { ...(this._config?.trend_colors_by_value || {}) };
+          const trendColors = { ...(this._config?.trend_colors_by_value || {}) };
           const good = { ...(this._config?.trend_good_by_value || {}) };
+          const backgrounds = { ...(this._config?.background_colors || {}) };
+          const icons = { ...(this._config?.icons || {}) };
+          const iconVisibility = { ...(this._config?.show_icons_by_value || {}) };
+          const opacity = { ...(this._config?.background_opacity || {}) };
           for (const k of DEFAULT_VALUES) {
-            const n = typeof ne[k] === "string" ? ne[k] : "";
+            const n = typeof ve[k] === "string" ? ve[k] : "";
+            if (typeof ve[`${k}_icon`] === "string" && ve[`${k}_icon`].trim()) icons[k] = ve[`${k}_icon`].trim();
+            else delete icons[k];
+            if (ve[`${k}_icon_enabled`] === false) iconVisibility[k] = false;
+            else delete iconVisibility[k];
             if (n.trim()) names[k] = n;
             else delete names[k];
-            if (ne[`${k}_trend`] === false) trends[k] = false;
+            if (ve[`${k}_trend`] === false) trends[k] = false;
             else delete trends[k];
-            if (["percent", "absolute", "both"].includes(ne[`${k}_trend_display`])) displays[k] = ne[`${k}_trend_display`];
+            if (["percent", "absolute", "both"].includes(ve[`${k}_trend_display`])) displays[k] = ve[`${k}_trend_display`];
             else delete displays[k];
-            colors[k] = ne[`${k}_trend_colors`] === true;
-            if (["none", "up", "down"].includes(ne[`${k}_trend_good`])) good[k] = ne[`${k}_trend_good`];
+            trendColors[k] = ve[`${k}_trend_colors`] === true;
+            if (["none", "up", "down"].includes(ve[`${k}_trend_good`])) good[k] = ve[`${k}_trend_good`];
             else delete good[k];
+            if (Array.isArray(ve[`${k}_bg`])) backgrounds[k] = ve[`${k}_bg`];
+            else if (typeof backgrounds[k] !== "string") delete backgrounds[k];
+            const a = ve[`${k}_alpha`];
+            if (typeof a === "number" && a < 1) opacity[k] = a;
+            else delete opacity[k];
           }
           next.names = names;
           next.trends = trends;
           next.trend_display_by_value = displays;
-          next.trend_colors_by_value = colors;
+          next.trend_colors_by_value = trendColors;
           next.trend_good_by_value = good;
-        }
-        const bg = next.bg_edit;
-        delete next.bg_edit;
-        if (bg) {
-          // Einträge für eigene Werte und Farben als Text (YAML) bleiben unverändert erhalten
-          const colors = { ...(this._config?.background_colors || {}) };
-          const opacity = { ...(this._config?.background_opacity || {}) };
-          for (const k of DEFAULT_VALUES) {
-            if (Array.isArray(bg[k])) colors[k] = bg[k];
-            else if (typeof colors[k] !== "string") delete colors[k];
-            const a = bg[`${k}_alpha`];
-            if (typeof a === "number" && a < 1) opacity[k] = a;
-            else delete opacity[k];
-          }
-          next.background_colors = colors;
+          next.icons = icons;
+          next.show_icons_by_value = iconVisibility;
+          next.background_colors = backgrounds;
           next.background_opacity = opacity;
-        }
-        if (sel) {
-          // Reihenfolge der bisherigen Auswahl und eigene Werte in "values" bleiben erhalten
-          const prev = Array.isArray(this._config?.values) ? this._config.values : DEFAULT_VALUES;
-          const kept = prev.filter((k) => !VALUES[k] || sel[k]);
-          for (const k of DEFAULT_VALUES) if (sel[k] && !kept.includes(k)) kept.push(k);
-          next.values = kept;
         }
         this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: next }, bubbles: true, composed: true }));
       });
@@ -1404,7 +1421,11 @@ class EnergyValuesCardEditor extends HTMLElement {
       custom_values: t.ed_custom,
     };
     for (const k of DEFAULT_VALUES) {
-      labels[k] = t[k];
+      labels[k] = t.cv_name;
+      labels[`${k}_enabled`] = "Anzeigen";
+      labels[`${k}_icon_enabled`] = t.cv_show_icon;
+      labels[`${k}_icon`] = t.cv_icon;
+      labels[`${k}_bg`] = t.ed_bg_color;
       labels[`${k}_alpha`] = t.ed_alpha;
       labels[`${k}_trend`] = t.cv_show_trend;
       labels[`${k}_trend_display`] = t.cv_trend_display;
@@ -1416,7 +1437,6 @@ class EnergyValuesCardEditor extends HTMLElement {
       layout: "list",
       decimals: 1,
       show_date: true,
-      show_icons: true,
       show_title: true,
       show_selector: false,
       water_unit: "m³",
@@ -1424,44 +1444,30 @@ class EnergyValuesCardEditor extends HTMLElement {
       volume_decimals: 2,
       liter_decimals: 0,
       ...this._config,
-      values_sel: Object.fromEntries(
-        DEFAULT_VALUES.map((k) => [k, (Array.isArray(this._config.values) ? this._config.values : DEFAULT_VALUES).includes(k)])
-      ),
-      names_edit: Object.fromEntries(
-        DEFAULT_VALUES.flatMap((k) => [
-          [k, this._config.names?.[k] ?? ""],
-          [`${k}_trend`, this._config.trends?.[k] !== false],
-          [`${k}_trend_display`, this._config.trend_display_by_value?.[k] ?? "percent"],
-          [`${k}_trend_colors`, this._config.trend_colors_by_value?.[k] !== false],
-          [`${k}_trend_good`, this._config.trend_good_by_value?.[k] ?? TREND_GOOD[k] ?? "none"],
-        ])
-      ),
-      bg_edit: Object.fromEntries(
+      custom_values: (this._config.custom_values || []).map((cv) => ({ ...cv, show_icon: cv.show_icon !== false })),
+      values_edit: Object.fromEntries(
         DEFAULT_VALUES.flatMap((k) => {
           const col = this._config.background_colors?.[k];
           const a = Number(this._config.background_opacity?.[k]);
           const alpha = this._config.background_opacity?.[k] != null && Number.isFinite(a) ? Math.max(0, Math.min(1, a > 1 ? a / 100 : a)) : 1;
-          return [[k, Array.isArray(col) ? col : undefined], [`${k}_alpha`, alpha]];
+          return [
+            [`${k}_enabled`, (Array.isArray(this._config.values) ? this._config.values : DEFAULT_VALUES).includes(k)],
+            [`${k}_icon_enabled`, this._config.show_icons_by_value?.[k] !== false],
+            [`${k}_icon`, this._config.icons?.[k] ?? ""],
+            [k, this._config.names?.[k] ?? ""],
+            [`${k}_bg`, Array.isArray(col) ? col : undefined],
+            [`${k}_alpha`, alpha],
+            [`${k}_trend`, this._config.trends?.[k] !== false],
+            [`${k}_trend_display`, this._config.trend_display_by_value?.[k] ?? "percent"],
+            [`${k}_trend_colors`, this._config.trend_colors_by_value?.[k] !== false],
+            [`${k}_trend_good`, this._config.trend_good_by_value?.[k] ?? TREND_GOOD[k] ?? "none"],
+          ];
         })
       ),
     };
     this._form.schema = [
       { name: "title", selector: { text: {} } },
       { name: "show_title", selector: { boolean: {} } },
-      {
-        type: "expandable",
-        name: "values_sel",
-        title: t.ed_values,
-        expanded: true,
-        schema: [
-          {
-            type: "grid",
-            name: "",
-            column_min_width: "150px",
-            schema: DEFAULT_VALUES.map((k) => ({ name: k, selector: { boolean: {} } })),
-          },
-        ],
-      },
       {
         type: "grid",
         name: "",
@@ -1474,6 +1480,7 @@ class EnergyValuesCardEditor extends HTMLElement {
                 options: [
                   { value: "list", label: t.ed_list },
                   { value: "grid", label: t.ed_grid },
+                  { value: "compact", label: t.ed_compact },
                 ],
               },
             },
@@ -1498,7 +1505,6 @@ class EnergyValuesCardEditor extends HTMLElement {
         ],
       },
       { name: "show_date", selector: { boolean: {} } },
-      { name: "show_icons", selector: { boolean: {} } },
       { name: "show_selector", selector: { boolean: {} } },
       {
         name: "custom_values",
@@ -1529,6 +1535,7 @@ class EnergyValuesCardEditor extends HTMLElement {
               unit: { label: t.cv_unit, selector: { text: {} } },
               decimals: { label: t.cv_decimals, selector: { number: { min: 0, max: 6, mode: "box" } } },
               icon: { label: t.cv_icon, selector: { icon: {} } },
+              show_icon: { label: t.cv_show_icon, selector: { boolean: {} } },
               color: { label: t.cv_color, selector: { text: {} } },
               show_trend: { label: t.cv_show_trend, selector: { boolean: {} } },
               trend_display: { label: t.cv_trend_display, selector: { select: { mode: "dropdown", options: [
@@ -1556,51 +1563,48 @@ class EnergyValuesCardEditor extends HTMLElement {
       },
       {
         type: "expandable",
-        name: "names_edit",
-        title: t.ed_names,
+        name: "values_edit",
+        title: "Werte bearbeiten",
+        expanded: true,
         schema: DEFAULT_VALUES.flatMap((k, index) => [
           ...(index > 0 ? [{ type: "divider" }] : []),
           {
-            type: "grid",
-            name: "",
+            type: "expandable",
+            name: `${k}_section`,
+            title: t[k] || k,
+            expanded: true,
+            // Die Felder bleiben durch flatten direkt in values_edit erhalten.
+            flatten: true,
             schema: [
-              { name: k, selector: { text: {} } },
-              { name: `${k}_trend`, selector: { boolean: {} } },
-              ...(PCT_KEYS.has(k) ? [] : [{
-                name: `${k}_trend_display`,
-                selector: {
-                  select: {
-                    mode: "dropdown",
-                    options: [
-                      { value: "percent", label: t.tr_percent },
-                      { value: "absolute", label: t.tr_absolute },
-                      { value: "both", label: t.tr_both },
-                    ],
-                  },
-                },
-              }]),
-              { name: `${k}_trend_colors`, selector: { boolean: {} } },
-              { name: `${k}_trend_good`, selector: { select: { mode: "dropdown", options: [
-                { value: "none", label: t.tg_none },
-                { value: "up", label: t.tg_up },
-                { value: "down", label: t.tg_down },
-              ] } } },
+              {
+                type: "grid",
+                name: "",
+                flatten: true,
+                column_min_width: "150px",
+                schema: [
+                  { name: `${k}_enabled`, selector: { boolean: {} } },
+                  { name: `${k}_icon_enabled`, selector: { boolean: {} } },
+                  { name: `${k}_icon`, selector: { icon: {} } },
+                  { name: k, selector: { text: {} } },
+                  { name: `${k}_bg`, selector: { color_rgb: {} } },
+                  { name: `${k}_alpha`, selector: { number: { min: 0, max: 1, step: 0.05, mode: "slider" } } },
+                  { name: `${k}_trend`, selector: { boolean: {} } },
+                  ...(PCT_KEYS.has(k) ? [] : [{ name: `${k}_trend_display`, selector: { select: { mode: "dropdown", options: [
+                    { value: "percent", label: t.tr_percent },
+                    { value: "absolute", label: t.tr_absolute },
+                    { value: "both", label: t.tr_both },
+                  ] } } }]),
+                  { name: `${k}_trend_colors`, selector: { boolean: {} } },
+                  { name: `${k}_trend_good`, selector: { select: { mode: "dropdown", options: [
+                    { value: "none", label: t.tg_none },
+                    { value: "up", label: t.tg_up },
+                    { value: "down", label: t.tg_down },
+                  ] } } },
+                ],
+              },
             ],
           },
         ]),
-      },
-      {
-        type: "expandable",
-        name: "bg_edit",
-        title: t.ed_bg_combined,
-        schema: DEFAULT_VALUES.map((k) => ({
-          type: "grid",
-          name: "",
-          schema: [
-            { name: k, selector: { color_rgb: {} } },
-            { name: `${k}_alpha`, selector: { number: { min: 0, max: 1, step: 0.05, mode: "slider" } } },
-          ],
-        })),
       },
     ];
     this._form.computeLabel = (s) => labels[s.name] || s.name;
