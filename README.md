@@ -8,8 +8,6 @@
 
 A Home Assistant dashboard card that shows selectable values from your **Energy dashboard** (consumption, grid import, grid export, solar, battery, self-sufficiency, low-carbon share, gas, water) and follows the **`energy-date-selection`** of the dashboard view.
 
-> **Status: early prerelease.** The card was developed without a long test cycle on different Home Assistant versions. Please report problems using the issue template (with `debug: true` output).
-
 ## Screenshot
 
 <img width="1289" height="170" alt="image" src="https://github.com/user-attachments/assets/eb6b04a5-79ab-4ab3-884b-75a5e5e4b7fb" />
