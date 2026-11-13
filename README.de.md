@@ -3,6 +3,8 @@
 [![Home Assistant Marketplace](https://img.shields.io/badge/Home%20Assistant-Marketplace-blue.svg)](https://www.home-assistant.io/integrations/marketplace/)
 ![Version](https://img.shields.io/badge/version-1.0.0-blue)
 
+<a href="https://www.buymeacoffee.com/tomreim0s" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-blue.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" ></a>
+
 [English version](README.md)
 
 Eine Dashboard-Karte für Home Assistant, die auswählbare Werte aus dem **Energy-Dashboard** anzeigt (Verbrauch, Netzbezug, Einspeisung, Solar, Batterie, Autarkie, CO₂-neutraler Anteil, Gas, Wasser) und der **`energy-date-selection`** der Dashboard-Ansicht folgt.
