@@ -34,7 +34,7 @@ A Home Assistant dashboard card that shows selectable values from your **Energy 
 [![Open your Home Assistant instance and open this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=YOUR_GITHUB_USER&repository=energy-values-card&category=plugin)
 
 1. MARKETPLACE → ⋮ → **Custom repositories**
-2. Repository: `https://github.com/YOUR_GITHUB_USER/energy-values-card`, category **Dashboard**
+2. Repository: `https://github.com/Schwippser/energy-values-card`, category **Dashboard**
 3. Install **Energy Values Card**. Prereleases are only offered if "Show beta versions" is enabled for the repository in HACS.
 4. Reload the browser (clear cache if needed).
 
